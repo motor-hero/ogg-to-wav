@@ -3,6 +3,7 @@ FROM python:3.9-slim
 # Install dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -15,13 +16,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY app.py .
-COPY .env .env
+COPY .env.example .env
 
-# Create directory for file processing
-RUN mkdir -p /app/uploads /app/converted
+# Create directory for file processing with proper permissions
+RUN mkdir -p /app/uploads /app/converted && \
+    chmod 777 /app/uploads /app/converted
 
 # Expose API port
 EXPOSE 5000
 
-# Run service
-CMD ["python", "app.py"]
+# Set environment variables for better Python logging
+ENV PYTHONUNBUFFERED=1
+
+# Run service with logging
+CMD ["python", "-u", "app.py"]
