@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY app.py .
-COPY .env.example .env.example
+COPY .env .env
 
 # Create directory for file processing
 RUN mkdir -p /app/uploads /app/converted
