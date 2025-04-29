@@ -26,24 +26,38 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
 # Validate API key
-def validate_api_key(request_api_key):
-    return request_api_key == API_KEY
+def validate_api_key(request):
+    # Check for X-API-Key header
+    api_key = request.headers.get('X-API-Key')
+    if api_key and api_key == API_KEY:
+        return True
+        
+    # Check for Authorization Bearer token
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        if token == API_KEY:
+            return True
+            
+    return False
 
 @app.route('/convert', methods=['POST'])
 def convert_audio():
     # Check API key
-    api_key = request.headers.get('X-API-Key')
-    
-    if not api_key or not validate_api_key(api_key):
+    if not validate_api_key(request):
         return jsonify({'error': 'Unauthorized - Invalid API key'}), 401
     
     # Log request information for debugging
+    app.logger.info(f"Request headers: {request.headers}")
     app.logger.info(f"Request form: {request.form}")
     app.logger.info(f"Request files: {request.files}")
+    app.logger.info(f"Content-Type: {request.headers.get('Content-Type', 'Not provided')}")
     
     # Check if file is in request
     if 'file' not in request.files:
-        # Check if the file was sent as binary data directly
+        # Try to handle raw binary data or different method
+        app.logger.info("No 'file' in request.files - trying alternative methods")
+        
         if request.data:
             try:
                 # Generate a temporary file from the raw data
@@ -54,26 +68,81 @@ def convert_audio():
                     f.write(request.data)
                 
                 # Continue with the conversion process
+                app.logger.info(f"Created temporary file from raw data: {input_file_path}")
                 filename = "audio.ogg"  # Default name
                 file_ext = ".ogg"
                 return process_file(input_file_path, file_ext, filename)
             except Exception as e:
+                app.logger.error(f"Error processing raw data: {str(e)}")
                 return jsonify({'error': f'Error processing raw data: {str(e)}'}), 400
+                
+        # Check for data in form fields that might contain binary data
+        app.logger.info(f"All form keys: {list(request.form.keys())}")
+        for key in request.form.keys():
+            app.logger.info(f"Found key in form: {key}")
+            if request.form[key] and len(request.form[key]) > 100:  # Likely binary data
+                try:
+                    app.logger.info(f"Attempting to process form data from key: {key}")
+                    # Try to save and process this data
+                    unique_id = str(uuid.uuid4())
+                    input_file_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}.ogg")
+                    
+                    with open(input_file_path, 'wb') as f:
+                        f.write(request.form[key].encode('latin1') if isinstance(request.form[key], str) else request.form[key])
+                    
+                    app.logger.info(f"Created file from form data: {input_file_path}")
+                    filename = "audio.ogg"
+                    file_ext = ".ogg"
+                    return process_file(input_file_path, file_ext, filename)
+                except Exception as e:
+                    app.logger.error(f"Error processing form data from {key}: {str(e)}")
+                    continue
+        
         # If content-type is multipart/form-data but no file field
         return jsonify({'error': 'No file provided. Ensure the file is sent with field name "file"'}), 400
     
     file = request.files['file']
+    app.logger.info(f"Received file: {file.filename}, content_type: {file.content_type}")
     
     # Check if file is selected
     if file.filename == '':
         return jsonify({'error': 'No file selected or filename is empty'}), 400
     
-    # Check file extension
+    # Check file extension - more permissive check
     filename = secure_filename(file.filename)
     file_ext = os.path.splitext(filename)[1].lower()
     
-    if file_ext not in ['.ogg', '.oga']:
-        return jsonify({'error': 'Invalid file format. Only .ogg and .oga files are supported'}), 400
+    # Save the file for inspection regardless of extension
+    unique_id = str(uuid.uuid4())
+    input_file_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}{file_ext}")
+    file.save(input_file_path)
+    
+    app.logger.info(f"Saved file to {input_file_path}")
+    
+    # Try to identify file type regardless of extension
+    try:
+        # Use ffmpeg/pydub to check if it's a valid audio file
+        sound = AudioSegment.from_file(input_file_path)
+        app.logger.info(f"Successfully loaded audio file with pydub: {input_file_path}")
+        
+        # If we get here, it's a valid audio file, proceed with conversion
+        output_file_path = os.path.join(CONVERTED_FOLDER, f"{unique_id}.wav")
+        sound.export(output_file_path, format="wav")
+        
+        app.logger.info(f"Successfully converted to WAV: {output_file_path}")
+        
+        # Clean up the input file
+        os.remove(input_file_path)
+        
+        # Return the converted file
+        return send_file(output_file_path, as_attachment=True, download_name=f"{os.path.splitext(filename)[0]}.wav")
+    except Exception as e:
+        # Clean up the input file
+        if os.path.exists(input_file_path):
+            os.remove(input_file_path)
+            
+        app.logger.error(f"Failed to process audio file: {str(e)}")
+        return jsonify({'error': f'File must be OGG format. Error: {str(e)}'}), 400
     
     return process_file(file, file_ext, filename)
 
