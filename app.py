@@ -39,13 +39,17 @@ def validate_api_key(request):
     
     return False
 
-@app.route('/', methods=['GET'])
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    return jsonify({
-        'service': 'OGG to WAV Converter',
-        'endpoints': ['/convert', '/health'],
-        'version': '1.0.0'
-    })
+    # Redirect all requests to the /convert endpoint
+    if request.method == 'POST':
+        return convert_ogg_to_wav()
+    else:
+        return jsonify({
+            'service': 'OGG/OGA to WAV Converter',
+            'endpoints': ['/', '/convert', '/health'],
+            'version': '1.0.0'
+        })
 
 @app.route('/convert', methods=['POST'])
 def convert_ogg_to_wav():
@@ -68,15 +72,13 @@ def convert_ogg_to_wav():
         logger.warning("Empty filename submitted")
         return jsonify({'error': 'No selected file'}), 400
     
-    # Check file type
-    filename_lower = file.filename.lower()
-    if not (filename_lower.endswith('.ogg') or filename_lower.endswith('.oga')):
-        logger.warning(f"Invalid file format: {file.filename}")
-        return jsonify({'error': 'File must be OGG or OGA format'}), 400
-    
+    # Accept any file format - let FFmpeg handle conversion
     # Create unique filenames for input and output
     unique_id = str(uuid.uuid4())
-    input_ext = os.path.splitext(file.filename)[1]  # Get original extension (.ogg or .oga)
+    input_ext = os.path.splitext(file.filename)[1]  # Get original extension
+    if not input_ext:
+        input_ext = '.bin'  # Default extension if none provided
+    
     input_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_input{input_ext}")
     output_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_output.wav")
     
@@ -85,9 +87,10 @@ def convert_ogg_to_wav():
         file.save(input_path)
         logger.info(f"Saved input file: {input_path}")
         
-        # Convert OGG/OGA to WAV using FFmpeg
+        # Convert audio to WAV using FFmpeg
         command = [
             'ffmpeg', 
+            '-y',  # Overwrite output files without asking
             '-i', input_path, 
             '-acodec', 'pcm_s16le',  # Standard WAV format
             '-ar', '44100',          # Sample rate: 44.1 kHz
@@ -105,8 +108,9 @@ def convert_ogg_to_wav():
                          download_name=f"{os.path.splitext(file.filename)[0]}.wav")
     
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
-        return jsonify({'error': f"Conversion error: {e.stderr.decode() if e.stderr else str(e)}"}), 500
+        error_msg = e.stderr.decode() if e.stderr else str(e)
+        logger.error(f"FFmpeg error: {error_msg}")
+        return jsonify({'error': f"Conversion error: {error_msg}"}), 500
     
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
@@ -114,8 +118,11 @@ def convert_ogg_to_wav():
     
     finally:
         # Clean up temporary files
-        logger.info("Cleaning up temporary files")
-        if os.path.exists(input_path):
-            os.remove(input_path)
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        try:
+            logger.info("Cleaning up temporary files")
+            if os.path.exists(input_path):
+                os.remove(input_path)
+            if os.path.exists(output_path) and os.path.isfile(output_path):
+                os.remove(output_path)
+        except Exception as e:
+            logger.error(f"Error cleaning up files: {str(e)}")
