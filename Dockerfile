@@ -1,32 +1,20 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    curl \
-    && apt-get clean \
+# Install ffmpeg for audio conversion
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application files
+# Copy application code
 COPY app.py .
-COPY .env .env
 
-# Create directory for file processing with proper permissions
-RUN mkdir -p /app/uploads /app/converted && \
-    chmod 777 /app/uploads /app/converted
+# Install Python dependencies
+RUN pip install --no-cache-dir flask
 
-# Expose API port
+# Expose port
 EXPOSE 5000
 
-# Set environment variables for better Python logging
-ENV PYTHONUNBUFFERED=1
-
-# Run service with logging
-CMD ["python", "-u", "app.py"]
+# Run the application
+CMD ["python", "app.py"]
